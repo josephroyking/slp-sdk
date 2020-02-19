@@ -18,8 +18,8 @@ export interface ICreateConfig {
 }
 
 export interface IMintConfig {
-  fundingAddress: string;
-  fundingWif: string;
+  fundingAddress: string | string[];
+  fundingWif: string | string[];
   tokenReceiverAddress: string;
   batonReceiverAddress: string;
   bchChangeReceiverAddress: string;

@@ -79,7 +79,10 @@ class TokenType1 {
     this.validateAddressFormat(mintConfig);
 
     // determine mainnet/testnet
-    const network: string = this.returnNetwork(mintConfig.fundingAddress);
+    let network: string;
+    if (!Array.isArray(mintConfig.fundingAddress))
+      network = this.returnNetwork(mintConfig.fundingAddress);
+    else network = this.returnNetwork(mintConfig.fundingAddress[0]);
 
     // network appropriate BITBOX instance
     const BITBOX: any = this.returnBITBOXInstance(network);
@@ -91,10 +94,71 @@ class TokenType1 {
       mintConfig.batonReceiverAddress
     );
 
+    // If fundingAddress and fundingWif are not an arrays, process as before
+    if (
+      !Array.isArray(mintConfig.fundingAddress) &&
+      !Array.isArray(mintConfig.fundingWif)
+    ) {
+      const balances: any = await bitboxNetwork.getAllSlpBalancesAndUtxos(
+        mintConfig.fundingAddress
+      );
+      if (!balances.slpBatonUtxos[mintConfig.tokenId])
+        throw Error("You don't have the minting baton for this token");
+
+      const tokenInfo: any = await bitboxNetwork.getTokenInformation(
+        mintConfig.tokenId
+      );
+
+      const mintQty = new BigNumber(mintConfig.additionalTokenQty).times(
+        10 ** tokenInfo.decimals
+      );
+
+      let inputUtxos = balances.slpBatonUtxos[mintConfig.tokenId];
+
+      inputUtxos = inputUtxos.concat(balances.nonSlpUtxos);
+
+      inputUtxos.forEach((txo: any) => (txo.wif = mintConfig.fundingWif));
+
+      const mintTxid = await bitboxNetwork.simpleTokenMint(
+        mintConfig.tokenId,
+        mintQty,
+        inputUtxos,
+        mintConfig.tokenReceiverAddress,
+        batonReceiverAddress,
+        mintConfig.bchChangeReceiverAddress
+      );
+      return mintTxid;
+    }
+
+    // Process for array here
     const balances: any = await bitboxNetwork.getAllSlpBalancesAndUtxos(
       mintConfig.fundingAddress
     );
-    if (!balances.slpBatonUtxos[mintConfig.tokenId])
+
+    // Process balances array for the minting baton
+    let hasMintingBaton = false;
+    let inputUtxos = [];
+    let mintingBaton;
+    for (let i = 0; i < balances.length; i += 1) {
+      let balance = balances[i].result;
+
+      if (!balance.slpBatonUtxos[mintConfig.tokenId]) {
+        // If this address does not have the minting baton, add its nonSlpUtxos to inputUtxos
+        for (let j = 0; j < balance.nonSlpUtxos.length; j += 1) {
+          inputUtxos.push(balance.nonSlpUtxos[j]);
+        }
+      } else {
+        // If this address has the minting baton, add the minting baton to inputUtxos
+        hasMintingBaton = true;
+        mintingBaton = balance.slpBatonUtxos[mintConfig.tokenId];
+        for (let k = 0; k < mintingBaton.length; k += 1) {
+          inputUtxos.push(mintingBaton[k]);
+        }
+      }
+    }
+
+    // If there is no minting baton, throw an error
+    if (!hasMintingBaton)
       throw Error("You don't have the minting baton for this token");
 
     const tokenInfo: any = await bitboxNetwork.getTokenInformation(
@@ -105,11 +169,20 @@ class TokenType1 {
       10 ** tokenInfo.decimals
     );
 
-    let inputUtxos = balances.slpBatonUtxos[mintConfig.tokenId];
+    // Handle case where user includes array for fundingAddress, but not for fundingWif
+    if (!Array.isArray(mintConfig.fundingWif))
+      throw Error(
+        "If fundingAddress is an Array, fundingWif must be a corresponding array."
+      );
 
-    inputUtxos = inputUtxos.concat(balances.nonSlpUtxos);
-
-    inputUtxos.forEach((txo: any) => (txo.wif = mintConfig.fundingWif));
+    inputUtxos.forEach((txo: any) => {
+      if (Array.isArray(mintConfig.fundingAddress)) {
+        mintConfig.fundingAddress.forEach((address: string, index: number) => {
+          if (txo.cashAddress === addy.toCashAddress(address))
+            txo.wif = mintConfig.fundingWif[index];
+        });
+      }
+    });
 
     const mintTxid = await bitboxNetwork.simpleTokenMint(
       mintConfig.tokenId,
